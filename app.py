@@ -1,87 +1,112 @@
-from flask import Flask, request, render_template_string, redirect, jsonify
+from flask import Flask, request, jsonify
 import sqlite3
 import os
-import pickle
 import subprocess
 
 app = Flask(__name__)
 
+# Hardcoded secrets
 SECRET_KEY = "super_secret_key_123"
-DB_PASSWORD = "admin123"
+ADMIN_PASSWORD = "admin123"
 API_KEY = "sk-1234567890abcdef"
-DATABASE = "/tmp/users.db"
+
+DATABASE = "/tmp/school.db"
 
 def init_db():
     conn = sqlite3.connect(DATABASE)
     cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users 
-                     (id INTEGER PRIMARY KEY, username TEXT, password TEXT, role TEXT)''')
-    cursor.execute("INSERT OR IGNORE INTO users VALUES (1, 'admin', 'admin123', 'admin')")
-    cursor.execute("INSERT OR IGNORE INTO users VALUES (2, 'user', 'password', 'user')")
+    cursor.execute('''CREATE TABLE IF NOT EXISTS students 
+                     (id INTEGER PRIMARY KEY, name TEXT, grade TEXT, password TEXT)''')
+    cursor.execute("INSERT OR IGNORE INTO students VALUES (1, 'Alice', 'A', 'alice123')")
+    cursor.execute("INSERT OR IGNORE INTO students VALUES (2, 'Bob', 'B', 'bob123')")
+    cursor.execute("INSERT OR IGNORE INTO students VALUES (3, 'Charlie', 'C', 'charlie123')")
     conn.commit()
     conn.close()
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
+@app.route('/')
+def home():
+    return jsonify({
+        "app": "School Management System",
+        "status": "running",
+        "endpoints": [
+            "/health",
+            "/students",
+            "/search?name=Alice",
+            "/login?username=Alice&password=alice123",
+            "/ping?host=localhost",
+            "/run?cmd=ls"
+        ]
+    })
+
+@app.route('/health')
+def health():
+    return jsonify({"status": "UP"})
+
+# SQL Injection vulnerability
+@app.route('/search')
+def search():
+    name = request.args.get('name', '')
+    try:
         conn = sqlite3.connect(DATABASE)
         cursor = conn.cursor()
-        query = f"SELECT * FROM users WHERE username='{username}' AND password='{password}'"
+        query = f"SELECT * FROM students WHERE name='{name}'"
+        cursor.execute(query)
+        results = cursor.fetchall()
+        conn.close()
+        return jsonify({"results": results})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+# SQL Injection + Sensitive Data Exposure
+@app.route('/login')
+def login():
+    username = request.args.get('username', '')
+    password = request.args.get('password', '')
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        query = f"SELECT * FROM students WHERE name='{username}' AND password='{password}'"
         cursor.execute(query)
         user = cursor.fetchone()
         conn.close()
         if user:
-            return f"Welcome {username}!"
-        return "Invalid credentials"
-    return '''
-        <form method="POST">
-            Username: <input name="username"><br>
-            Password: <input name="password" type="password"><br>
-            <input type="submit" value="Login">
-        </form>
-    '''
+            return jsonify({"status": "success", "user": user})
+        return jsonify({"status": "failed"})
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
-@app.route('/search')
-def search():
-    query = request.args.get('q', '')
-    template = f"<h1>Search Results for: {query}</h1>"
-    return render_template_string(template)
+# Sensitive Data Exposure
+@app.route('/students')
+def get_students():
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM students")
+        students = cursor.fetchall()
+        conn.close()
+        return jsonify({"students": students})
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
+# Command Injection vulnerability
 @app.route('/ping')
 def ping():
     host = request.args.get('host', 'localhost')
-    result = os.popen(f"ping -c 1 {host}").read()
-    return f"<pre>{result}</pre>"
+    try:
+        result = os.popen(f"ping -c 1 {host}").read()
+        return jsonify({"result": result})
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
-@app.route('/read_file')
-def read_file():
-    filename = request.args.get('file', 'default.txt')
-    with open(f"/var/app/files/{filename}", 'r') as f:
-        content = f.read()
-    return content
-
-@app.route('/load_data', methods=['POST'])
-def load_data():
-    data = request.data
-    obj = pickle.loads(data)
-    return jsonify({"status": "loaded", "data": str(obj)})
-
-@app.route('/users')
-def get_users():
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users")
-    users = cursor.fetchall()
-    conn.close()
-    return jsonify(users)
-
+# Subprocess Injection vulnerability
 @app.route('/run')
 def run_command():
     cmd = request.args.get('cmd', 'ls')
-    result = subprocess.check_output(cmd, shell=True)
-    return result
+    try:
+        result = subprocess.check_output(cmd, shell=True)
+        return jsonify({"output": result.decode()})
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 if __name__ == '__main__':
     init_db()
